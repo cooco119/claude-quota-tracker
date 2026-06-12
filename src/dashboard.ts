@@ -86,8 +86,7 @@ function handleApi(store: Store, url: URL, res: ServerResponse): void {
     }
     case "/api/contrib": {
       const from = num("from", nowMs - 84 * DAY_MS); // ~12 weeks
-      const metric = url.searchParams.get("metric") === "cost" ? "cost" : "tokens";
-      return json(res, 200, api.contrib(store, from, num("to", nowMs), metric));
+      return json(res, 200, api.contrib(store, from, num("to", nowMs)));
     }
     case "/api/timeseries": return json(res, 200, api.timeseries(store, nowMs));
     case "/api/estimates": return json(res, 200, api.estimates(store));
@@ -144,7 +143,8 @@ function startServer(port: number, token: string): void {
     server.listen(p, "127.0.0.1", () => {
       writeLock({ pid: process.pid, port: p, startedAtMs: Date.now(), token });
       console.log(`[dashboard] http://127.0.0.1:${p}/`);
-      openBrowser(p);
+      // The browser is opened by the launcher (launch()), never here — opening
+      // in both the spawned server and the launcher pops two tabs on cold start.
     });
   };
   tryListen(port, 0);

@@ -38,22 +38,28 @@ function renderOverview(ov){
   el('scope').textContent = ov.scopeNote || '';
   el('gauges').innerHTML = (ov.windows&&ov.windows.length)? ov.windows.map(gauge).join('') : empty('윈도우 데이터 없음 — poller를 먼저 실행하세요');
   el('kpi').innerHTML =
-    kpi('7일 비용', fmtUsd(ov.kpi.cost7d)) +
-    kpi('7일 토큰', fmtN(ov.kpi.tokens7d)) +
-    kpi('7일 실행', ''+ov.kpi.runs7d);
+    kpi('7일 토큰 (전체)', fmtN(ov.kpi.tokens7d)) +
+    kpi('7일 active 토큰', fmtN(ov.kpi.activeTokens7d)) +
+    kpi('7일 오케스트레이터 비용', fmtUsd(ov.kpi.cost7d)) +
+    kpi('7일 태스크 실행', ''+ov.kpi.runs7d);
+  el('ingestfresh').textContent = ov.kpi.ingestMaxTsMs
+    ? '사용량 데이터 기준 ' + fmtTime(ov.kpi.ingestMaxTsMs)
+    : '';
 }
 function kpi(label,val){ return '<div class="kcard"><div class="klabel">'+label+'</div><div class="kval">'+val+'</div></div>'; }
 
 function renderModels(md){
   var totals = md.totals||[];
-  if(!totals.length){ el('models').innerHTML = empty('아직 실행된 태스크가 없습니다 (오케스트레이터가 태스크를 실행하면 채워집니다)'); el('tokcat').innerHTML=''; return; }
-  var maxCost = Math.max.apply(null, totals.map(function(t){return t.totalCostUsd;}).concat([1e-9]));
+  if(!totals.length){ el('models').innerHTML = empty('아직 사용량 데이터가 없습니다 (quota ingest 또는 poll 후 채워집니다)'); el('tokcat').innerHTML=''; return; }
+  // Bar length by ACTIVE tokens (input+output+cache-create); cache_read is huge
+  // and would otherwise flatten every bar to the same length.
+  var maxActive = Math.max.apply(null, totals.map(function(t){return t.activeTokens;}).concat([1]));
   var rows = totals.map(function(t,i){
-    var w = Math.max(2, (t.totalCostUsd/maxCost)*100);
+    var w = Math.max(2, (t.activeTokens/maxActive)*100);
     var m = esc(t.model);
     return '<div class="mrow"><div class="mlabel" title="'+m+'">'+m+'</div>'+
       '<div class="mbarwrap"><div class="mbar" style="width:'+w+'%;background:'+colorFor(t.model,i)+'"></div></div>'+
-      '<div class="mval">'+fmtUsd(t.totalCostUsd)+' · '+fmtN(t.totalTokens)+'tok · '+t.runs+'run</div></div>';
+      '<div class="mval">'+fmtN(t.activeTokens)+' active · '+fmtN(t.totalTokens)+' total · '+t.events+' msg</div></div>';
   }).join('');
   el('models').innerHTML = rows;
 
@@ -134,7 +140,7 @@ function load(){
   Promise.all([
     fetch('/api/overview').then(function(r){return r.json();}),
     fetch('/api/models').then(function(r){return r.json();}),
-    fetch('/api/contrib?metric=tokens').then(function(r){return r.json();}),
+    fetch('/api/contrib').then(function(r){return r.json();}),
     fetch('/api/timeseries').then(function(r){return r.json();}),
     fetch('/api/estimates').then(function(r){return r.json();}),
     fetch('/api/queue').then(function(r){return r.json();})
@@ -178,7 +184,8 @@ main{max-width:1180px;margin:0 auto;padding:22px 24px;display:flex;flex-directio
 .g-pct{fill:var(--fg);font-size:26px;font-weight:600;text-anchor:middle;}
 .gsub{font-size:11px;color:var(--muted);margin-top:-6px;}
 .warn{color:#f5a524;}
-#kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px;}
+#kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px;}
+@media(max-width:720px){#kpi{grid-template-columns:repeat(2,1fr);}}
 .kcard{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;}
 .klabel{font-size:11px;color:var(--muted);}
 .kval{font-size:20px;font-weight:600;}
@@ -219,10 +226,10 @@ export const DASHBOARD_HTML = `<!doctype html>
   <button id="refresh">새로고침</button>
 </header>
 <main>
-  <section class="card"><div id="gauges"></div><div id="kpi"></div></section>
+  <section class="card"><div id="gauges"></div><div id="kpi"></div><div id="ingestfresh" class="muted" style="font-size:11px;margin-top:8px"></div></section>
   <div class="row two">
-    <section class="card"><h2>모델별 비용·토큰</h2><div id="models"></div><div id="tokcat" style="margin-top:14px"></div></section>
-    <section class="card"><h2>활동 (일별 토큰)</h2><div id="contrib"></div></section>
+    <section class="card"><h2>모델별 사용량 (전체 Claude Code)</h2><div id="models"></div><div id="tokcat" style="margin-top:14px"></div></section>
+    <section class="card"><h2>활동 (일별 전체 토큰)</h2><div id="contrib"></div></section>
   </div>
   <div class="row two">
     <section class="card"><h2>윈도우 사용률 추이</h2><div id="timeseries"></div></section>

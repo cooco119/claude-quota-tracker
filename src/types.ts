@@ -61,6 +61,21 @@ export interface Task extends TaskInput {
   lastError: string | null;
 }
 
+/** One assistant message's token usage, parsed from a Claude Code session log. */
+export interface UsageEvent {
+  messageId: string;
+  requestId: string | null;
+  ts: number;
+  model: string;
+  sessionId: string | null;
+  cwd: string | null;
+  isSidechain: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+}
+
 /** Actuals extracted from one headless `claude -p --output-format json` run. */
 export interface RunActuals {
   model: string | null;

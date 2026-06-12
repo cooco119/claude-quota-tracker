@@ -54,42 +54,52 @@ export function overview(store: Store, nowMs: number) {
           })
         : null,
   }));
+  // Total usage (all Claude Code work) from ingested session logs.
+  const usage = store.usageSummary(nowMs - 7 * DAY_MS, nowMs);
+  // Cost/runs stay sourced from task_runs — usage_events has no cost, and runs
+  // count quota-tracker's own orchestrated tasks (a distinct, smaller number).
   const k = store.runCostSummary(nowMs - 7 * DAY_MS, nowMs);
   return {
     generatedAtMs: latest?.generatedAtMs ?? null,
     ageMin: latest ? Math.round((nowMs - latest.generatedAtMs) / 60000) : null,
     windows,
-    kpi: { cost7d: k.totalCostUsd, tokens7d: k.totalTokens, runs7d: k.runs },
-    // Honest scope label: these runs are quota-tracker's own orchestrated tasks.
-    scopeNote: "task_runs = quota-tracker가 실행한 태스크 (전체 Claude 사용량 아님)",
+    kpi: {
+      tokens7d: usage.totalTokens,
+      activeTokens7d: usage.activeTokens,
+      cost7d: k.totalCostUsd,
+      runs7d: k.runs,
+      ingestMaxTsMs: usage.maxTsMs,
+    },
+    scopeNote: "전체 Claude Code 사용량 (세션 로그 기반 · web/claude.ai 미포함)",
   };
 }
 
-/** Tier 2: per-model usage + token-category split. */
+/** Tier 2: per-model TOTAL usage + token-category split (from session logs). */
 export function models(store: Store, fromTs: number, toTs: number) {
   return {
     from: fromTs,
     to: toTs,
-    totals: store.modelTotals(fromTs, toTs),
-    categories: store.tokenCategoryTotals(fromTs, toTs),
+    totals: store.usageModelTotals(fromTs, toTs),
+    categories: store.usageTokenCategoryTotals(fromTs, toTs),
   };
 }
 
-/** Tier 2: GitHub-style contribution — local-day buckets, gaps filled with 0. */
-export function contrib(
-  store: Store, fromTs: number, toTs: number, metric: "tokens" | "cost",
-) {
-  const runs = store.runsInRange(fromTs, toTs);
+/**
+ * Tier 2: GitHub-style contribution — local-day buckets, gaps filled with 0.
+ * Total daily tokens across all Claude Code work (from session logs).
+ */
+export function contrib(store: Store, fromTs: number, toTs: number) {
+  const events = store.usageEventsInRange(fromTs, toTs);
   const byDay = new Map<number, { value: number; runs: number }>();
   const dayKey = (ts: number): number => {
     const d = new Date(ts);
     d.setHours(0, 0, 0, 0); // local midnight
     return d.getTime();
   };
-  for (const r of runs) {
-    const key = dayKey(r.startedTs);
+  for (const e of events) {
+    const key = dayKey(e.ts);
     const cur = byDay.get(key) ?? { value: 0, runs: 0 };
-    cur.value += metric === "cost" ? r.costUsd : r.totalTokens;
+    cur.value += e.totalTokens;
     cur.runs += 1;
     byDay.set(key, cur);
   }
@@ -107,7 +117,7 @@ export function contrib(
     days.push({ day: key, value: e?.value ?? 0, runs: e?.runs ?? 0 });
     cur.setDate(cur.getDate() + 1);
   }
-  return { from: fromTs, to: toTs, metric, days };
+  return { from: fromTs, to: toTs, metric: "tokens", days };
 }
 
 /** Tier 3: per-window usage time series. */

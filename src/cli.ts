@@ -23,6 +23,7 @@ Usage:
   quota hint [--threshold N]  세션이 임계값 이상이면 넛지 1줄 (hook용)
   quota menubar            SwiftBar 플러그인 출력
   quota dashboard [--open] 로컬 웹 대시보드 기동 (멱등)
+  quota ingest             세션 로그 → 전체 사용량 적재 (poll이 자동 수행)
   quota paths              config/data 경로 출력
 `;
 
@@ -76,6 +77,21 @@ export async function main(argv: string[]): Promise<void> {
     case "hint":
       printHint(argv.slice(1));
       return;
+    case "ingest": {
+      const { ingestUsage } = await import("./ingest.js");
+      const { Store } = await import("./store.js");
+      const { DB_PATH } = await import("./config.js");
+      const store = new Store(DB_PATH);
+      try {
+        const r = ingestUsage(store, Date.now());
+        console.log(
+          `[quota-tracker] ingest: ${r.inserted} new events from ${r.scanned}/${r.files} files`,
+        );
+      } finally {
+        store.close();
+      }
+      return;
+    }
     case "dashboard":
       return dashboard(argv.slice(1));
     case "paths":

@@ -108,6 +108,10 @@ export const PROJECT_ROOT =
   (isSea()
     ? join(homedir(), ".quota-tracker")
     : join(dirname(fileURLToPath(import.meta.url)), ".."));
+
+/** Claude Code session logs — source for total-usage ingestion. */
+export const CLAUDE_PROJECTS_DIR =
+  process.env.CLAUDE_PROJECTS_DIR ?? join(homedir(), ".claude", "projects");
 export const DATA_DIR = join(PROJECT_ROOT, "data");
 export const DB_PATH = join(DATA_DIR, "quota.db");
 export const LATEST_JSON_PATH = join(DATA_DIR, "latest.json");

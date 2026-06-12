@@ -7,6 +7,7 @@ import {
   type Config,
 } from "./config.js";
 import { recoverStaleRunning } from "./executor.js";
+import { ingestUsage } from "./ingest.js";
 import { isSea } from "./sea.js";
 import { currentTimezone, shouldRunExecutor } from "./tasks.js";
 import { forecastAtReset, type Forecast } from "./forecast.js";
@@ -91,6 +92,22 @@ export async function pollOnce(nowMs: number = Date.now()): Promise<LatestJson> 
   // shows last-good data instead of blanking for a poll cycle.
   if (anySuccess) {
     writeFileSync(LATEST_JSON_PATH, JSON.stringify(latest, null, 2));
+  }
+
+  // Part C hook, fully isolated: ingest Claude Code session logs into
+  // usage_events. A failure here must never break Part A polling.
+  try {
+    const store = new Store(DB_PATH);
+    try {
+      const r = ingestUsage(store, nowMs);
+      if (r.inserted > 0) {
+        console.log(`[quota-tracker] ingested ${r.inserted} usage events`);
+      }
+    } finally {
+      store.close();
+    }
+  } catch (e) {
+    console.error("[quota-tracker] usage ingest hook failed:", e);
   }
 
   // Part B hook, fully isolated: a failure here must never break Part A polling.

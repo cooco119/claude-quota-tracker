@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
 import * as api from "../src/dashboard-api.js";
 import { Store } from "../src/store.js";
-import type { RunActuals, TaskInput } from "../src/types.js";
+import type { RunActuals, TaskInput, UsageEvent } from "../src/types.js";
+
+let usageSeq = 0;
+function seedUsage(store: Store, ts: number, model: string, tok: {
+  input?: number; output?: number; cacheCreation?: number; cacheRead?: number;
+}): void {
+  const e: UsageEvent = {
+    messageId: `msg_${usageSeq++}`, requestId: null, ts, model,
+    sessionId: "s", cwd: "/tmp", isSidechain: false,
+    inputTokens: tok.input ?? 0, outputTokens: tok.output ?? 0,
+    cacheCreationTokens: tok.cacheCreation ?? 0, cacheReadTokens: tok.cacheRead ?? 0,
+  };
+  store.ingestFile({
+    path: `f${usageSeq}`, size: 1, mtimeMs: 1, ino: 1, newByteOffset: 1,
+    events: [e], nowMs: ts,
+  });
+}
 
 function input(p: Partial<TaskInput> = {}): TaskInput {
   return {
@@ -36,10 +52,12 @@ describe("dashboard-api empty state (no rows — must not throw)", () => {
     const now = 1_700_000_000_000;
     // windows come from latest.json (env state); KPI is the store-derived part.
     const ov = api.overview(store, now);
-    expect(ov.kpi).toEqual({ cost7d: 0, tokens7d: 0, runs7d: 0 });
+    expect(ov.kpi.tokens7d).toBe(0);
+    expect(ov.kpi.cost7d).toBe(0);
+    expect(ov.kpi.runs7d).toBe(0);
     expect(Array.isArray(ov.windows)).toBe(true);
     expect(api.models(store, now - 1000, now).totals).toEqual([]);
-    expect(api.contrib(store, now - 86400000, now, "tokens").days.length).toBeGreaterThan(0);
+    expect(api.contrib(store, now - 86400000, now).days.length).toBeGreaterThan(0);
     expect(api.estimates(store).summary).toEqual([]);
     expect(api.queue(store).queued).toBe(0);
     store.close();
@@ -49,28 +67,26 @@ describe("dashboard-api empty state (no rows — must not throw)", () => {
 describe("dashboard-api with data", () => {
   const now = 1_700_000_000_000;
 
-  it("aggregates model totals and token categories", () => {
+  it("aggregates total per-model usage and token categories (session logs)", () => {
     const store = new Store(":memory:");
-    seedRun(store, now - 1000, "claude-fable-5",
-      { input: 100, output: 50, cacheCreation: 200, cacheRead: 10, cost: 0.5 });
-    seedRun(store, now - 2000, "claude-sonnet-4-6",
-      { input: 10, output: 5, cacheCreation: 0, cacheRead: 0, cost: 0.01 });
+    seedUsage(store, now - 1000, "claude-fable-5",
+      { input: 100, output: 50, cacheCreation: 200, cacheRead: 10 });
+    seedUsage(store, now - 2000, "claude-sonnet-4-6", { input: 10, output: 5 });
     const m = api.models(store, now - 10000, now);
     expect(m.totals).toHaveLength(2);
-    expect(m.totals[0].model).toBe("claude-fable-5"); // sorted by cost desc
-    expect(m.totals[0].totalTokens).toBe(360); // 100+50+200+10 (all 4 categories)
+    expect(m.totals[0].model).toBe("claude-fable-5"); // higher active tokens
+    expect(m.totals[0].activeTokens).toBe(350); // excludes cache_read
+    expect(m.totals[0].totalTokens).toBe(360);
     expect(m.categories).toEqual({ input: 110, output: 55, cacheCreation: 200, cacheRead: 10 });
     store.close();
   });
 
-  it("buckets contribution by local day with gaps filled", () => {
+  it("buckets contribution by local day with gaps filled (total tokens)", () => {
     const store = new Store(":memory:");
     const day = 86400000;
-    seedRun(store, now - 3 * day, "m1",
-      { input: 100, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0.1 });
-    seedRun(store, now, "m1",
-      { input: 50, output: 0, cacheCreation: 0, cacheRead: 0, cost: 0.05 });
-    const c = api.contrib(store, now - 3 * day, now, "tokens");
+    seedUsage(store, now - 3 * day, "m1", { input: 100 });
+    seedUsage(store, now, "m1", { input: 50 });
+    const c = api.contrib(store, now - 3 * day, now);
     expect(c.days.length).toBeGreaterThanOrEqual(4); // continuous grid
     const nonzero = c.days.filter((d) => d.value > 0);
     expect(nonzero.length).toBe(2);
@@ -80,7 +96,7 @@ describe("dashboard-api with data", () => {
 
   it("caps the contribution grid for huge/malformed ranges (DoS guard)", () => {
     const store = new Store(":memory:");
-    const c = api.contrib(store, 0, now, "tokens"); // ~54 years if uncapped
+    const c = api.contrib(store, 0, now); // ~54 years if uncapped
     expect(c.days.length).toBeLessThanOrEqual(370);
     store.close();
   });
@@ -110,14 +126,18 @@ describe("dashboard-api with data", () => {
     store.close();
   });
 
-  it("computes 7-day KPI totals in overview", () => {
+  it("computes 7-day KPI: tokens from usage_events, cost/runs from task_runs", () => {
     const store = new Store(":memory:");
+    // task_runs → cost7d + runs7d (orchestrator's own runs)
     seedRun(store, now - 1000, "m1",
       { input: 1000, output: 500, cacheCreation: 0, cacheRead: 0, cost: 0.25 });
+    // usage_events → tokens7d (total Claude Code usage)
+    seedUsage(store, now - 500, "m1", { input: 800, output: 200, cacheRead: 5000 });
     const ov = api.overview(store, now);
-    expect(ov.kpi.runs7d).toBe(1);
-    expect(ov.kpi.tokens7d).toBe(1500);
-    expect(ov.kpi.cost7d).toBeCloseTo(0.25);
+    expect(ov.kpi.runs7d).toBe(1); // task_runs
+    expect(ov.kpi.cost7d).toBeCloseTo(0.25); // task_runs
+    expect(ov.kpi.tokens7d).toBe(6000); // usage_events: 800+200+5000
+    expect(ov.kpi.activeTokens7d).toBe(1000); // excludes cache_read
     store.close();
   });
 });

@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   SIZE_ESTIMATES,
   type RunActuals, type Task, type TaskInput, type TaskSize, type TaskStatus,
-  type WindowKey, type WindowReading,
+  type UsageEvent, type WindowKey, type WindowReading,
 } from "./types.js";
 
 export interface HistoryPoint {
@@ -92,6 +92,31 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs (task_id, started_ts);
       CREATE INDEX IF NOT EXISTS idx_task_runs_ended
         ON task_runs (started_ts) WHERE ended_ts IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS usage_events (
+        message_id            TEXT    NOT NULL PRIMARY KEY,
+        request_id            TEXT,
+        ts                    INTEGER NOT NULL,
+        model                 TEXT    NOT NULL,
+        session_id            TEXT,
+        cwd                   TEXT,
+        is_sidechain          INTEGER NOT NULL DEFAULT 0,
+        input_tokens          INTEGER NOT NULL DEFAULT 0,
+        output_tokens         INTEGER NOT NULL DEFAULT 0,
+        cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+        source_file           TEXT    NOT NULL,
+        ingested_ts           INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events (ts);
+      CREATE INDEX IF NOT EXISTS idx_usage_model_ts ON usage_events (model, ts);
+      CREATE TABLE IF NOT EXISTS ingest_cursor (
+        path           TEXT    NOT NULL PRIMARY KEY,
+        last_size      INTEGER NOT NULL,
+        last_mtime_ms  INTEGER NOT NULL,
+        last_ino       INTEGER NOT NULL DEFAULT 0,
+        byte_offset    INTEGER NOT NULL DEFAULT 0,
+        updated_ts     INTEGER NOT NULL
+      );
     `);
   }
 
@@ -375,89 +400,10 @@ export class Store {
   }
 
   // ---- Part C: dashboard aggregations (read-only) ----
+  // Per-model/contrib aggregation now lives in the usage_events methods below
+  // (total Claude Code usage). task_runs only powers cost/runs + estimates now.
 
-  /** Per-model token-category sums + cost + run count over a window. */
-  modelTotals(fromTs: number, toTs: number): Array<{
-    model: string; inputTokens: number; outputTokens: number;
-    cacheCreationTokens: number; cacheReadTokens: number;
-    totalCostUsd: number; runs: number; totalTokens: number;
-  }> {
-    const rows = this.db
-      .prepare(
-        `SELECT COALESCE(model,'(unknown)') AS model,
-                SUM(COALESCE(input_tokens,0)) AS input,
-                SUM(COALESCE(output_tokens,0)) AS output,
-                SUM(COALESCE(cache_creation_tokens,0)) AS cacheCreate,
-                SUM(COALESCE(cache_read_tokens,0)) AS cacheRead,
-                SUM(COALESCE(total_cost_usd,0)) AS cost,
-                COUNT(*) AS runs
-         FROM task_runs
-         WHERE ended_ts IS NOT NULL AND started_ts BETWEEN ? AND ?
-         GROUP BY model ORDER BY cost DESC`,
-      )
-      .all(fromTs, toTs) as Array<{
-        model: string; input: number; output: number; cacheCreate: number;
-        cacheRead: number; cost: number; runs: number;
-      }>;
-    return rows.map((r) => ({
-      model: r.model,
-      inputTokens: r.input,
-      outputTokens: r.output,
-      cacheCreationTokens: r.cacheCreate,
-      cacheReadTokens: r.cacheRead,
-      totalCostUsd: r.cost,
-      runs: r.runs,
-      // Include all four categories so the model-row total reconciles with the
-      // input/output/cache-create/cache-read breakdown bar.
-      totalTokens: r.input + r.output + r.cacheCreate + r.cacheRead,
-    }));
-  }
-
-  /** Single-row token-category split for the 100% stacked bar. */
-  tokenCategoryTotals(fromTs: number, toTs: number): {
-    input: number; output: number; cacheCreation: number; cacheRead: number;
-  } {
-    const r = this.db
-      .prepare(
-        `SELECT SUM(COALESCE(input_tokens,0)) AS input,
-                SUM(COALESCE(output_tokens,0)) AS output,
-                SUM(COALESCE(cache_creation_tokens,0)) AS cacheCreate,
-                SUM(COALESCE(cache_read_tokens,0)) AS cacheRead
-         FROM task_runs
-         WHERE ended_ts IS NOT NULL AND started_ts BETWEEN ? AND ?`,
-      )
-      .get(fromTs, toTs) as {
-        input: number | null; output: number | null;
-        cacheCreate: number | null; cacheRead: number | null;
-      };
-    return {
-      input: r.input ?? 0, output: r.output ?? 0,
-      cacheCreation: r.cacheCreate ?? 0, cacheRead: r.cacheRead ?? 0,
-    };
-  }
-
-  /** Lightweight per-run projection — server buckets these by local day/hour. */
-  runsInRange(fromTs: number, toTs: number): Array<{
-    startedTs: number; model: string; totalTokens: number; costUsd: number;
-  }> {
-    const rows = this.db
-      .prepare(
-        `SELECT started_ts AS ts, COALESCE(model,'(unknown)') AS model,
-                COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
-                  + COALESCE(cache_creation_tokens,0)
-                  + COALESCE(cache_read_tokens,0) AS tokens,
-                COALESCE(total_cost_usd,0) AS cost
-         FROM task_runs
-         WHERE ended_ts IS NOT NULL AND started_ts BETWEEN ? AND ?
-         ORDER BY started_ts ASC`,
-      )
-      .all(fromTs, toTs) as Array<{ ts: number; model: string; tokens: number; cost: number }>;
-    return rows.map((r) => ({
-      startedTs: r.ts, model: r.model, totalTokens: r.tokens, costUsd: r.cost,
-    }));
-  }
-
-  /** Header KPI totals. */
+  /** Header KPI totals (orchestrator's own task_runs — cost + run count). */
   runCostSummary(fromTs: number, toTs: number): {
     totalCostUsd: number; totalTokens: number; runs: number;
   } {
@@ -485,6 +431,168 @@ export class Store {
       .all() as Array<{ status: TaskStatus; n: number }>;
     for (const r of rows) base[r.status] = r.n;
     return base;
+  }
+
+  // ---- session-log usage ingest (total Claude Code usage) ----
+
+  getCursor(path: string): {
+    lastSize: number; lastMtimeMs: number; lastIno: number; byteOffset: number;
+  } | null {
+    const r = this.db
+      .prepare(
+        `SELECT last_size, last_mtime_ms, last_ino, byte_offset
+         FROM ingest_cursor WHERE path = ?`,
+      )
+      .get(path) as {
+        last_size: number; last_mtime_ms: number; last_ino: number; byte_offset: number;
+      } | undefined;
+    return r
+      ? { lastSize: r.last_size, lastMtimeMs: r.last_mtime_ms, lastIno: r.last_ino, byteOffset: r.byte_offset }
+      : null;
+  }
+
+  /**
+   * Append a file's new usage events and advance its cursor in one transaction.
+   * Keyed on message_id, so re-reading a line is a no-op. A streaming assistant
+   * message is written multiple times under ONE msg_ id with a GROWING
+   * output_tokens (input/cache are stable); the final line has the largest
+   * total. INSERT OR IGNORE would keep the first (partial) line and drop the
+   * final one, under-counting output. So on conflict we keep the row with the
+   * larger 4-category token sum — the completed message wins, idempotently.
+   */
+  ingestFile(args: {
+    path: string; size: number; mtimeMs: number; ino: number; newByteOffset: number;
+    events: UsageEvent[]; nowMs: number;
+  }): { inserted: number; skipped: number } {
+    const ins = this.db.prepare(
+      `INSERT INTO usage_events
+       (message_id, request_id, ts, model, session_id, cwd, is_sidechain,
+        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+        source_file, ingested_ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(message_id) DO UPDATE SET
+         request_id=excluded.request_id, ts=excluded.ts, model=excluded.model,
+         session_id=excluded.session_id, cwd=excluded.cwd,
+         is_sidechain=excluded.is_sidechain,
+         input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+         cache_creation_tokens=excluded.cache_creation_tokens,
+         cache_read_tokens=excluded.cache_read_tokens,
+         source_file=excluded.source_file, ingested_ts=excluded.ingested_ts
+       WHERE (excluded.input_tokens+excluded.output_tokens
+              +excluded.cache_creation_tokens+excluded.cache_read_tokens)
+           > (usage_events.input_tokens+usage_events.output_tokens
+              +usage_events.cache_creation_tokens+usage_events.cache_read_tokens)`,
+    );
+    const cursor = this.db.prepare(
+      `INSERT OR REPLACE INTO ingest_cursor
+       (path, last_size, last_mtime_ms, last_ino, byte_offset, updated_ts)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    let inserted = 0;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const e of args.events) {
+        const res = ins.run(
+          e.messageId, e.requestId, e.ts, e.model, e.sessionId, e.cwd,
+          e.isSidechain ? 1 : 0, e.inputTokens, e.outputTokens,
+          e.cacheCreationTokens, e.cacheReadTokens, args.path, args.nowMs,
+        );
+        inserted += Number(res.changes);
+      }
+      cursor.run(args.path, args.size, args.mtimeMs, args.ino, args.newByteOffset, args.nowMs);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return { inserted, skipped: args.events.length - inserted };
+  }
+
+  /**
+   * Per-model token totals over a window. `activeTokens` excludes cache_read
+   * (which dwarfs everything) so it can drive bar length/sort; the four
+   * categories stay separate for the breakdown bar.
+   */
+  usageModelTotals(fromTs: number, toTs: number): Array<{
+    model: string; inputTokens: number; outputTokens: number;
+    cacheCreationTokens: number; cacheReadTokens: number;
+    events: number; activeTokens: number; totalTokens: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT model,
+                SUM(input_tokens) AS input, SUM(output_tokens) AS output,
+                SUM(cache_creation_tokens) AS cacheCreate,
+                SUM(cache_read_tokens) AS cacheRead, COUNT(*) AS events
+         FROM usage_events WHERE ts BETWEEN ? AND ?
+         GROUP BY model
+         ORDER BY (SUM(input_tokens)+SUM(output_tokens)+SUM(cache_creation_tokens)) DESC`,
+      )
+      .all(fromTs, toTs) as Array<{
+        model: string; input: number; output: number; cacheCreate: number;
+        cacheRead: number; events: number;
+      }>;
+    return rows.map((r) => ({
+      model: r.model,
+      inputTokens: r.input, outputTokens: r.output,
+      cacheCreationTokens: r.cacheCreate, cacheReadTokens: r.cacheRead,
+      events: r.events,
+      activeTokens: r.input + r.output + r.cacheCreate,
+      totalTokens: r.input + r.output + r.cacheCreate + r.cacheRead,
+    }));
+  }
+
+  usageTokenCategoryTotals(fromTs: number, toTs: number): {
+    input: number; output: number; cacheCreation: number; cacheRead: number;
+  } {
+    const r = this.db
+      .prepare(
+        `SELECT SUM(input_tokens) AS input, SUM(output_tokens) AS output,
+                SUM(cache_creation_tokens) AS cacheCreate,
+                SUM(cache_read_tokens) AS cacheRead
+         FROM usage_events WHERE ts BETWEEN ? AND ?`,
+      )
+      .get(fromTs, toTs) as {
+        input: number | null; output: number | null;
+        cacheCreate: number | null; cacheRead: number | null;
+      };
+    return {
+      input: r.input ?? 0, output: r.output ?? 0,
+      cacheCreation: r.cacheCreate ?? 0, cacheRead: r.cacheRead ?? 0,
+    };
+  }
+
+  /** Lightweight per-event projection for day/hour bucketing in the server. */
+  usageEventsInRange(fromTs: number, toTs: number): Array<{
+    ts: number; model: string; totalTokens: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT ts, model,
+                input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS tokens
+         FROM usage_events WHERE ts BETWEEN ? AND ? ORDER BY ts ASC`,
+      )
+      .all(fromTs, toTs) as Array<{ ts: number; model: string; tokens: number }>;
+    return rows.map((r) => ({ ts: r.ts, model: r.model, totalTokens: r.tokens }));
+  }
+
+  usageSummary(fromTs: number, toTs: number): {
+    totalTokens: number; activeTokens: number; events: number; maxTsMs: number | null;
+  } {
+    const r = this.db
+      .prepare(
+        `SELECT SUM(input_tokens+output_tokens+cache_creation_tokens+cache_read_tokens) AS total,
+                SUM(input_tokens+output_tokens+cache_creation_tokens) AS active,
+                COUNT(*) AS events, MAX(ts) AS maxTs
+         FROM usage_events WHERE ts BETWEEN ? AND ?`,
+      )
+      .get(fromTs, toTs) as {
+        total: number | null; active: number | null; events: number; maxTs: number | null;
+      };
+    return {
+      totalTokens: r.total ?? 0, activeTokens: r.active ?? 0,
+      events: r.events, maxTsMs: r.maxTs ?? null,
+    };
   }
 
   close(): void {
