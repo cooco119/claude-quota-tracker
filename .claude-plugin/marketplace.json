@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "quota-tracker-marketplace",
+  "version": "0.1.0",
+  "description": "Claude Max20 quota awareness + night scheduler integration for Claude Code",
+  "owner": {
+    "name": "jaejun.lee",
+    "email": "cooco119@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "quota-tracker",
+      "description": "Quota awareness + night-scheduler integration. A UserPromptSubmit hook nudges when the session window is filling; a skill lets Claude defer heavy work to the night executor via the local `quota` CLI. Requires the `quota` CLI/daemon (run `bash scripts/setup.sh` once).",
+      "version": "0.1.0",
+      "author": {
+        "name": "jaejun.lee",
+        "email": "cooco119@gmail.com"
+      },
+      "source": "./claude-plugin",
+      "category": "productivity"
+    }
+  ]
+}

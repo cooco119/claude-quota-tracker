@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Template only. `quota install` (src/install.ts) generates the real plist
+     with absolute paths filled in for the current user. Placeholders:
+       __NODE__   absolute node path (e.g. /opt/homebrew/bin/node)
+       __CLI__    ~/.quota-tracker/lib/dist/cli.js
+       __HOME__   ~/.quota-tracker
+       __PATH__   PATH for the agent -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.quota-tracker.poller</string>
+  <key>ProgramArguments</key>
+  <array><string>__NODE__</string><string>__CLI__</string><string>poll</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>__PATH__</string>
+    <key>QUOTA_TRACKER_HOME</key><string>__HOME__</string>
+  </dict>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/data/poller.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/data/poller.err.log</string>
+</dict>
+</plist>

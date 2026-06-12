@@ -1,0 +1,6 @@
+{
+  "name": "quota-tracker",
+  "version": "0.1.0",
+  "description": "Claude Max20 quota awareness + night-scheduler integration. A UserPromptSubmit hook injects a nudge when the session window is filling, and a skill lets Claude defer heavy work to the night executor via the local `quota` CLI.",
+  "author": { "name": "jaejun.lee" }
+}

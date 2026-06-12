@@ -1,0 +1,5 @@
+{
+  "main": "build/cli.cjs",
+  "output": "build/sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}

@@ -1,0 +1,30 @@
+{
+  "pollIntervalSeconds": 300,
+  "notify": {
+    "underUse": { "enabled": true, "thresholdPct": 80 },
+    "overUse": { "enabled": false, "thresholdPct": 100 },
+    "scheduleHint": { "enabled": false },
+    "cooldownMinutes": 120,
+    "quietHours": { "start": "23:00", "end": "08:00" },
+    "minElapsedFraction": 0.25
+  },
+  "nightWindow": {
+    "start": "23:00",
+    "end": "08:00",
+    "confirmedAt": null,
+    "confirmedTz": null
+  },
+  "executor": {
+    "enabled": true,
+    "sessionGuardPct": 80,
+    "weeklyGuardPct": 95,
+    "maxAttempts": 3,
+    "taskTimeoutMinutes": { "xs": 5, "s": 10, "m": 20, "l": 40, "xl": 60 },
+    "lowUsageMinDays": 3,
+    "nightFloorHHMM": "02:00"
+  },
+  "dashboard": {
+    "port": 47600,
+    "idleShutdownMin": 0
+  }
+}

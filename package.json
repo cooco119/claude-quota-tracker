@@ -1,0 +1,31 @@
+{
+  "name": "quota-tracker",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Track Claude Max20 usage windows, forecast burn rate, nudge on under-use, and schedule heavy work for low-usage night hours.",
+  "license": "MIT",
+  "author": "jaejun.lee",
+  "homepage": "https://github.com/cooco119/claude-quota-tracker#readme",
+  "repository": { "type": "git", "url": "https://github.com/cooco119/claude-quota-tracker.git" },
+  "keywords": ["claude", "claude-code", "quota", "macos", "scheduler", "launchd"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "setup": "bash scripts/setup.sh",
+    "poll": "node dist/poller.js",
+    "menubar": "node dist/menubar.js",
+    "enqueue": "node dist/enqueue.js",
+    "executor": "node dist/executor.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.28.0",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
