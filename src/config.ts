@@ -59,12 +59,23 @@ export interface DashboardConfig {
   idleShutdownMin: number;
 }
 
+export interface IngestConfig {
+  /**
+   * Extra session-log roots scanned in addition to ~/.claude/projects. Custom
+   * harnesses (e.g. CCS) log elsewhere — add their root here (leading "~/"
+   * expands to $HOME). Roots are walked recursively; overlap is harmless
+   * because events dedup on message.id.
+   */
+  extraRoots: string[];
+}
+
 export interface Config {
   pollIntervalSeconds: number;
   notify: NotifyConfig;
   nightWindow: NightWindow;
   executor: ExecutorConfig;
   dashboard: DashboardConfig;
+  ingest: IngestConfig;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -96,6 +107,9 @@ export const DEFAULT_CONFIG: Config = {
   dashboard: {
     port: 47600,
     idleShutdownMin: 0,
+  },
+  ingest: {
+    extraRoots: [],
   },
 };
 
@@ -150,6 +164,7 @@ export function loadConfig(path: string = CONFIG_PATH): Config {
       },
     },
     dashboard: { ...DEFAULT_CONFIG.dashboard, ...(raw.dashboard ?? {}) },
+    ingest: { ...DEFAULT_CONFIG.ingest, ...(raw.ingest ?? {}) },
   };
 }
 

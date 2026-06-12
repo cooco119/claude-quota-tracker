@@ -26,5 +26,8 @@
   "dashboard": {
     "port": 47600,
     "idleShutdownMin": 0
+  },
+  "ingest": {
+    "extraRoots": []
   }
 }

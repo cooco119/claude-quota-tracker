@@ -1,30 +1,43 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_PROJECTS_DIR } from "./config.js";
+import { CLAUDE_PROJECTS_DIR, loadConfig } from "./config.js";
 import type { Store } from "./store.js";
 import type { UsageEvent } from "./types.js";
 
 const NL = 0x0a; // '\n'
 
-/** List every *.jsonl under ~/.claude/projects/<dir>/. */
+function expandTilde(p: string): string {
+  return p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
+}
+
+/** Default scan roots: ~/.claude/projects + any config extraRoots (custom harnesses). */
+export function resolveIngestRoots(): string[] {
+  const extra = loadConfig().ingest.extraRoots.map(expandTilde);
+  const seen = new Set<string>();
+  return [CLAUDE_PROJECTS_DIR, ...extra].filter((r) => {
+    if (seen.has(r)) return false;
+    seen.add(r);
+    return true;
+  });
+}
+
+/**
+ * Every *.jsonl under a root, walked recursively. ~/.claude/projects is two
+ * levels deep, but custom harnesses (CCS) nest sessions and subagent
+ * transcripts arbitrarily deep, so we recurse. Symlinked dirs are not followed
+ * (Node's recursive readdir skips them), avoiding loops.
+ */
 function listSessionFiles(root: string): string[] {
-  let dirs: string[];
+  let entries: Array<{ name: string; parentPath: string; isFile(): boolean }>;
   try {
-    dirs = readdirSync(root, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => join(root, d.name));
+    entries = readdirSync(root, { withFileTypes: true, recursive: true }) as never;
   } catch {
-    return []; // no ~/.claude/projects yet
+    return []; // root doesn't exist
   }
   const files: string[] = [];
-  for (const dir of dirs) {
-    try {
-      for (const f of readdirSync(dir)) {
-        if (f.endsWith(".jsonl")) files.push(join(dir, f));
-      }
-    } catch {
-      // dir vanished mid-scan; skip
-    }
+  for (const e of entries) {
+    if (e.isFile() && e.name.endsWith(".jsonl")) files.push(join(e.parentPath, e.name));
   }
   return files;
 }
@@ -129,11 +142,14 @@ export function parseUsageLine(line: string): UsageEvent | null {
  * Returns counts for `quota ingest` / debugging.
  */
 export function ingestUsage(
-  store: Store, nowMs: number, root: string = CLAUDE_PROJECTS_DIR,
+  store: Store, nowMs: number, roots?: string | string[],
 ): { files: number; scanned: number; inserted: number } {
+  const rootList = roots === undefined
+    ? resolveIngestRoots()
+    : Array.isArray(roots) ? roots : [roots];
   let scanned = 0;
   let inserted = 0;
-  const files = listSessionFiles(root);
+  const files = rootList.flatMap(listSessionFiles);
   for (const path of files) {
     let st;
     try {
