@@ -250,33 +250,46 @@ export class Store {
   }
 
   /** Next claimable task without claiming it (window-fit check before claim). */
-  peekNextTask(): Task | null {
+  /** SQL fragment + params restricting to `allowedSizes` (empty = no restriction). */
+  private sizeFilter(allowedSizes?: TaskSize[]): { clause: string; params: TaskSize[] } {
+    if (!allowedSizes || allowedSizes.length === 0) return { clause: "", params: [] };
+    return {
+      clause: ` AND size IN (${allowedSizes.map(() => "?").join(",")})`,
+      params: allowedSizes,
+    };
+  }
+
+  peekNextTask(allowedSizes?: TaskSize[]): Task | null {
+    const f = this.sizeFilter(allowedSizes);
     const row = this.db
       .prepare(
         `SELECT * FROM tasks
-         WHERE status IN ('queued','carried_over') AND unattended_ok = 1
+         WHERE status IN ('queued','carried_over') AND unattended_ok = 1${f.clause}
          ORDER BY priority DESC, created_ts ASC LIMIT 1`,
       )
-      .get() as Record<string, unknown> | undefined;
+      .get(...f.params) as Record<string, unknown> | undefined;
     return row ? this.rowToTask(row) : null;
   }
 
   /**
    * Atomically claim the highest-priority unattended task: single UPDATE with
-   * a subselect so two executors can never claim the same task.
+   * a subselect so two executors can never claim the same task. `allowedSizes`
+   * restricts to tasks that fit the remaining window — so a too-big head task
+   * doesn't block smaller ones behind it (head-of-line avoidance).
    */
-  claimNextTask(ts: number): Task | null {
+  claimNextTask(ts: number, allowedSizes?: TaskSize[]): Task | null {
+    const f = this.sizeFilter(allowedSizes);
     const row = this.db
       .prepare(
         `UPDATE tasks SET status = 'running', updated_ts = ?, attempts = attempts + 1
          WHERE id = (
            SELECT id FROM tasks
-           WHERE status IN ('queued','carried_over') AND unattended_ok = 1
+           WHERE status IN ('queued','carried_over') AND unattended_ok = 1${f.clause}
            ORDER BY priority DESC, created_ts ASC LIMIT 1
          )
          RETURNING *`,
       )
-      .get(ts) as Record<string, unknown> | undefined;
+      .get(ts, ...f.params) as Record<string, unknown> | undefined;
     return row ? this.rowToTask(row) : null;
   }
 

@@ -14,7 +14,7 @@ import {
   bestNightStartMs, currentTimezone, isLatestFresh, msUntilWindowEnd,
   shouldRunExecutor, windowGuard, type GuardInput,
 } from "./tasks.js";
-import type { Task } from "./types.js";
+import type { Task, TaskSize } from "./types.js";
 
 /**
  * Freshly claimed tasks are skipped by stale recovery for this long: there is
@@ -216,36 +216,36 @@ export async function runNightLoop(deps: RunDeps = {}): Promise<void> {
         console.log(`[executor] stop: ${verdict.reason}`);
         return;
       }
-      // Window fit: don't start a task whose timeout outlives the night window.
-      const next = store.peekNextTask();
-      if (next) {
-        const fitMs = (config.executor.taskTimeoutMinutes[next.size] ?? 60) * 60 * 1000;
-        if (msUntilWindowEnd(nowMs, config.nightWindow) < fitMs) {
+      // Window fit: only consider tasks whose timeout fits the time left before
+      // the window ends. A too-big head task must not block smaller ones behind
+      // it — restrict the claim to fitting sizes rather than stopping.
+      const remMs = msUntilWindowEnd(nowMs, config.nightWindow);
+      const fitSizes = (Object.keys(config.executor.taskTimeoutMinutes) as TaskSize[])
+        .filter((s) => config.executor.taskTimeoutMinutes[s] * 60 * 1000 <= remMs);
+      const next = store.peekNextTask(fitSizes);
+      if (!next) {
+        console.log("[executor] stop: no claimable task fits the remaining window");
+        return;
+      }
+      // Deferrable night tasks hold until the night's lowest-usage hour.
+      if (next.scheduledWindow === "night") {
+        const best = bestNightStartMs({
+          nowMs,
+          nightWindow: config.nightWindow,
+          history: store.history("claude", "session_5h", nowMs - 14 * 24 * 60 * 60 * 1000),
+          minDays: config.executor.lowUsageMinDays,
+          floorHHMM: config.executor.nightFloorHHMM,
+        });
+        if (nowMs < best.startMs) {
+          const mins = Math.round((best.startMs - nowMs) / 60000);
           console.log(
-            `[executor] stop: task #${next.id} (${next.size}) does not fit before window end`,
+            `[executor] stop: holding for low-usage hour ${best.hour}:00 ` +
+            `(${best.reason}, ~${mins}m)`,
           );
           return;
         }
-        // Deferrable night tasks hold until the night's lowest-usage hour.
-        if (next.scheduledWindow === "night") {
-          const best = bestNightStartMs({
-            nowMs,
-            nightWindow: config.nightWindow,
-            history: store.history("claude", "session_5h", nowMs - 14 * 24 * 60 * 60 * 1000),
-            minDays: config.executor.lowUsageMinDays,
-            floorHHMM: config.executor.nightFloorHHMM,
-          });
-          if (nowMs < best.startMs) {
-            const mins = Math.round((best.startMs - nowMs) / 60000);
-            console.log(
-              `[executor] stop: holding for low-usage hour ${best.hour}:00 ` +
-              `(${best.reason}, ~${mins}m)`,
-            );
-            return;
-          }
-        }
       }
-      const task = store.claimNextTask(nowMs);
+      const task = store.claimNextTask(nowMs, fitSizes);
       if (!task) return;
       console.log(`[executor] task #${task.id} (${task.size}, ${task.permissionClass})`);
       const ok = await executeTask(store, task, config, latest.guard, deps);

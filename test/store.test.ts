@@ -115,6 +115,22 @@ describe("Store task queue (in-memory)", () => {
     store.close();
   });
 
+  it("restricts claim to allowed sizes — skips a too-big head task (no head-of-line)", () => {
+    const store = new Store(":memory:");
+    // higher-priority xl ahead of a lower-priority xs
+    store.enqueueTask(100, taskInput({ size: "xl", priority: 9, prompt: "big" }));
+    store.enqueueTask(200, taskInput({ size: "xs", priority: 0, prompt: "small" }));
+    // only xs/s fit the remaining window → xl is skipped, xs runs
+    expect(store.peekNextTask(["xs", "s"])?.prompt).toBe("small");
+    expect(store.claimNextTask(300, ["xs", "s"])?.prompt).toBe("small");
+    // with no restriction the xl (higher priority) would have won
+    const store2 = new Store(":memory:");
+    store2.enqueueTask(100, taskInput({ size: "xl", priority: 9, prompt: "big" }));
+    store2.enqueueTask(200, taskInput({ size: "xs", priority: 0, prompt: "small" }));
+    expect(store2.claimNextTask(300)?.prompt).toBe("big");
+    store.close(); store2.close();
+  });
+
   it("claims atomically: a claimed task cannot be claimed twice", () => {
     const store = new Store(":memory:");
     const t = store.enqueueTask(100, taskInput({}));

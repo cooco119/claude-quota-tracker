@@ -131,9 +131,22 @@ quota executor --task <id>
 | `destructive` | ❌ (manual only) | — |
 
 Night execution holds until your configured floor (default **2 AM**) and, once a
-few days of history exist, targets the lowest-burn hour of the window. It only
-fires while the machine is awake — see the sleep/wake notes in
-[`scripts/setup.sh`](scripts/setup.sh) output.
+few days of history exist, targets the lowest-burn hour of the window.
+
+**What "unattended" honestly means** — three limits to know before you rely on it:
+
+- **The machine must be awake.** launchd's `StartInterval` does not fire (or wake
+  the Mac) during sleep, so a sleeping Mac runs nothing. Keep it awake for the
+  window, e.g. `sudo pmset repeat wake MTWRFSU 01:55:00` (wake before the floor)
+  or `caffeinate -s` while plugged in. `quota uninstall` doesn't touch pmset.
+- **The session window throttles throughput.** Running `claude -p` burns your 5h
+  session window, and execution pauses when it crosses `executor.sessionGuardPct`
+  (default 80%). So one night fills roughly one or two session windows' worth of
+  work, not the whole weekly window — raise `sessionGuardPct` if you want it to
+  burn harder overnight.
+- **It runs tasks that fit the time left.** A task whose size-timeout exceeds the
+  remaining window is skipped in favor of smaller tasks that fit (it runs earlier
+  on a later night), so the queue keeps draining rather than stalling.
 
 ---
 
@@ -167,10 +180,14 @@ quota enqueue ──▶ tasks ──night executor──▶ task_runs┘
   (`node:sqlite`, `node:http`, `fs`). The dashboard's charts are hand-rolled
   inline SVG — no CDN, no build step, works offline.
 - **Two separate data sources, on purpose.** `usage_events` (ingested from your
-  Claude Code session logs, deduped by `message.id`) is your **total** usage and
+  Claude Code session logs, deduped by `message.id`) is your total usage and
   drives the dashboard's model/heatmap/token charts. `task_runs` is only the
   orchestrator's own runs and powers cost + size-estimate accuracy. They are
   never mixed into one number.
+  - *Scope:* out of the box this reads `~/.claude/projects`, where standard
+    Claude Code logs every project. If you run a **custom harness** (e.g. CCS, or
+    a non-default `CLAUDE_CONFIG_DIR`) that logs elsewhere, add its root to
+    `config.ingest.extraRoots` — otherwise the dashboard "total" undercounts.
 - **Idempotent, incremental ingest.** Session logs are read from a per-file
   byte cursor (multibyte-safe), deduped on the `message.id` primary key, and
   re-running is a no-op. A 26 MB / 300-file corpus ingests in well under a
@@ -187,6 +204,8 @@ quota enqueue ──▶ tasks ──night executor──▶ task_runs┘
 - `executor` — `sessionGuardPct` (default 80), `nightFloorHHMM` (default
   `02:00`), per-size timeouts, `maxAttempts`
 - `dashboard` — `port` (default 47600), `idleShutdownMin`
+- `ingest` — `extraRoots` (extra session-log roots for custom harnesses; `~/`
+  expands to `$HOME`)
 
 ---
 
@@ -203,7 +222,7 @@ Code usage only (not claude.ai / the web app).
 
 ```bash
 npm run build        # tsc → dist/
-npm test             # vitest (115 tests)
+npm test             # vitest (116 tests)
 npm run typecheck
 ```
 
