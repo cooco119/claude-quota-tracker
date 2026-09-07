@@ -4,43 +4,41 @@
 
 Turn the existing deferred-task executor into a quota-aware scheduler that spreads Claude usage across the available 5-hour and weekly windows instead of only reacting near exhaustion.
 
-The first implementation deliberately keeps the existing unattended/night safety model intact. It changes *when an already-eligible task may start*, not what permissions it gets or when unattended execution is allowed.
+Status: **implemented on `feature/quota-aware-pacing`**.
 
-## Existing pieces to reuse
+## Reused foundation
 
 - Claude 5-hour and weekly usage snapshots from `latest.json`.
 - Persistent task queue and claim/retry lifecycle.
 - Existing hard guards (`sessionGuardPct`, `weeklyGuardPct`).
 - Night-window confirmation and permission triage.
-- Executor loop and stale-run recovery.
+- Existing executor, worktree isolation and stale-run recovery.
 
-## Phase 1 — pacing governor
+## Phase 1 — pacing governor ✅
 
-Add a pure, deterministic policy function that computes an ideal consumption curve for each quota window:
+Implemented in `src/pacing.ts`.
 
-- infer window start from `resetEpochMs - windowDurationMs`;
-- compute elapsed fraction of the window;
-- compute target usage as `guardPct * elapsedFraction`;
-- allow a configurable burst/slack above the target;
-- block new opportunistic dispatch when actual usage is above the paced target;
-- evaluate both the 5-hour and weekly windows, with either one able to become the bottleneck;
-- keep the existing hard guards as final safety ceilings.
+- Linear ideal-consumption curve for both 5-hour and weekly windows.
+- Configurable slack/burst allowance.
+- Either quota window can become the bottleneck.
+- Missing or stale reset data fails closed when pacing is enabled.
+- Existing hard guards remain authoritative.
 
-This means a weekly window at 60% elapsed should normally have consumed roughly 60% of its configured usable budget. If actual consumption is materially ahead of that curve, queued work waits. If it is behind, queued work can run.
+## Phase 2 — task semantics ✅
 
-## Phase 2 — task semantics
+Implemented with sidecar scheduling metadata in `src/scheduler-meta.ts` and pure admission policy in `src/scheduler-policy.ts`.
 
-Add explicit scheduling intent instead of overloading `--night`:
+- `interactive`: pacing does not delay manual execution.
+- `deadline`: obeys pacing until the computed latest safe start, then may bypass pacing but never hard guards.
+- `opportunistic`: only admitted when pacing reports spare capacity.
+- Optional deadline and estimated-token override.
+- Pause/resume metadata without mutating the legacy task lifecycle schema.
 
-- `interactive`: never delayed by the quota scheduler;
-- `deadline`: may be delayed while slack remains before its deadline;
-- `opportunistic`: run only when the governor reports spare quota.
+## Phase 3 — MCP surface ✅
 
-Add optional deadline and estimated-cost metadata to queued tasks.
+Implemented in `src/mcp-server.ts` using stdio JSON-RPC/MCP without an additional runtime dependency.
 
-## Phase 3 — MCP surface
-
-Expose the scheduler through MCP without duplicating policy:
+Tools:
 
 - `submit_task`
 - `get_quota_status`
@@ -50,21 +48,39 @@ Expose the scheduler through MCP without duplicating policy:
 - `resume_task`
 - `run_now`
 
-The MCP server should be a thin adapter over the existing store/executor/governor modules.
+See `docs/MCP_SCHEDULER.md`.
 
-## Phase 4 — adaptive estimation
+## Phase 4 — adaptive estimation ✅
 
-Use completed runs to learn expected consumption by task size/model and improve admission decisions. Until enough history exists, use conservative static estimates.
+Implemented in `src/adaptive-estimate.ts`.
 
-## Phase 5 — continuous dispatch
+- Static size estimates are used during cold start.
+- After a configurable minimum number of successful same-size runs, the scheduler uses the historical median plus a 15% safety margin.
+- A task-specific estimate override takes precedence.
+- Adaptive estimates improve deadline latest-safe-start calculation.
+- Token count is deliberately **not** treated as linearly equivalent to Anthropic quota percentage.
 
-Generalize unattended execution beyond the current night-only window while preserving explicit user opt-in and permission isolation. This is intentionally separate from Phase 1 so quota policy can be tested without weakening existing safety gates.
+## Phase 5 — continuous dispatch ✅
 
-## Phase 1 acceptance criteria
+Implemented through the poller and paced one-shot executor.
 
-1. Pacing is disabled by configuration by default for backwards compatibility.
-2. Missing/reset-invalid quota data fails closed when pacing is enabled.
-3. Both session and weekly windows participate in the decision.
-4. Existing hard guards remain authoritative.
-5. Pure policy tests cover ahead-of-curve, behind-curve, reset-boundary, slack, and disabled behavior.
-6. Executor logs explain which window caused a pacing pause.
+- `continuousEnabled` is a global opt-in.
+- Each task additionally requires explicit `continuous: true`.
+- `interactive` and destructive tasks never become continuous unattended work.
+- Existing unattended permission triage and write-scoped git worktree isolation remain unchanged.
+- The poller launches at most one paced task per fresh quota snapshot; the queue is never drained using one stale percentage reading.
+
+## Safety invariants
+
+1. Hard 5-hour and weekly guards are never bypassed.
+2. Missing/stale quota snapshots never authorize paced work.
+3. Continuous execution requires global and per-task opt-in.
+4. Destructive tasks remain manual-only.
+5. Write-scoped tasks continue to use isolated git worktrees.
+6. Only one paced executor may run at a time.
+7. Every automatic task start is re-evaluated against a fresh poll cycle.
+
+## Validation
+
+- Unit coverage for pacing, scheduling intent/deadline behavior and adaptive estimation.
+- GitHub Actions runs `npm run typecheck` and `npm test` on the branch/PR.
