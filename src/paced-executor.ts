@@ -1,10 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { DB_PATH, LATEST_JSON_PATH, loadConfig } from "./config.js";
+import { LATEST_JSON_PATH, loadConfig } from "./config.js";
+import { runNightLoop } from "./executor.js";
 import { loadPacingConfig } from "./pacing-config.js";
 import { quotaPacingVerdict } from "./pacing.js";
-import { executeTask } from "./executor.js";
-import { Store } from "./store.js";
 import type { GuardInput } from "./tasks.js";
 
 interface LatestSnapshot {
@@ -49,7 +48,12 @@ function readLatest(nowMs: number): LatestSnapshot {
   }
 }
 
-export async function runPacedOnce(): Promise<boolean> {
+/**
+ * Admission-gate the existing night executor with the quota pacing policy.
+ * The original executor remains responsible for confirmation, permissions,
+ * hard quota guards, low-usage-hour scheduling, locking and worktree isolation.
+ */
+export async function runPacedNightLoop(): Promise<boolean> {
   const config = loadConfig();
   const pacing = loadPacingConfig();
   const nowMs = Date.now();
@@ -74,24 +78,14 @@ export async function runPacedOnce(): Promise<boolean> {
     return false;
   }
 
-  const store = new Store(DB_PATH);
-  try {
-    const task = store.claimNextTask(nowMs);
-    if (!task) {
-      console.log("[paced-executor] no claimable task");
-      return false;
-    }
-    console.log(`[paced-executor] task #${task.id} (${task.size}, ${task.permissionClass})`);
-    return await executeTask(store, task, config, latest.guard);
-  } finally {
-    store.close();
-  }
+  await runNightLoop();
+  return true;
 }
 
 const isMain = process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  runPacedOnce().catch((e) => {
+  runPacedNightLoop().catch((e) => {
     console.error("[paced-executor] fatal:", e);
     process.exitCode = 1;
   });
