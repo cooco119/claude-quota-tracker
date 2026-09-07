@@ -23,6 +23,12 @@
     "lowUsageMinDays": 3,
     "nightFloorHHMM": "02:00"
   },
+  "pacing": {
+    "enabled": false,
+    "slackPct": 5,
+    "sessionWindowHours": 5,
+    "weeklyWindowHours": 168
+  },
   "dashboard": {
     "port": 47600,
     "idleShutdownMin": 0
