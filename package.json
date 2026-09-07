@@ -16,7 +16,8 @@
     "poll": "node dist/poller.js",
     "menubar": "node dist/menubar.js",
     "enqueue": "node dist/enqueue.js",
-    "executor": "node dist/executor.js"
+    "executor": "node dist/executor.js",
+    "paced-executor": "node dist/paced-executor.js"
   },
   "engines": {
     "node": ">=22.5.0"
