@@ -6,6 +6,12 @@ export interface PacingConfig {
   slackPct: number;
   sessionWindowHours: number;
   weeklyWindowHours: number;
+  /** Permit explicitly opted-in tasks to run outside the night window. */
+  continuousEnabled: boolean;
+  /** Extra wall-clock margin used when computing latest safe deadline start. */
+  deadlineSafetyMinutes: number;
+  /** Successful same-size runs required before historical estimation is trusted. */
+  adaptiveMinSamples: number;
 }
 
 export const DEFAULT_PACING_CONFIG: PacingConfig = {
@@ -13,6 +19,9 @@ export const DEFAULT_PACING_CONFIG: PacingConfig = {
   slackPct: 5,
   sessionWindowHours: 5,
   weeklyWindowHours: 7 * 24,
+  continuousEnabled: false,
+  deadlineSafetyMinutes: 15,
+  adaptiveMinSamples: 3,
 };
 
 export function loadPacingConfig(path: string = CONFIG_PATH): PacingConfig {
