@@ -6,18 +6,22 @@ import { install, uninstall } from "./install.js";
 import { renderMenubar } from "./menubar.js";
 import { pollOnce } from "./poller.js";
 import { printHint, printStatus, printTasks } from "./report.js";
+import { runPacedOnce } from "./paced-executor.js";
+import { startMcpServer } from "./mcp-server.js";
 
-const HELP = `quota — Claude Max20 quota tracker & night task orchestrator
+const HELP = `quota — Claude Max20 quota tracker & quota-aware task orchestrator
 
 Usage:
   quota install            설치: 런처 설치 + launchd 등록 + SwiftBar 시작
   quota uninstall          launchd 해제 (데이터 보존)
   quota poll               usage 1회 폴링 (launchd가 5분마다 호출)
-  quota executor           야간 큐 소화 루프 (보통 poll이 자동 발사)
-  quota executor --task N  태스크 N 수동 실행 (destructive/긴급)
+  quota executor           기존 야간 큐 소화 루프
+  quota paced-executor     quota-aware admission 후 최대 1개 태스크 실행
+  quota executor --task N  태스크 N 수동 실행 (hard quota guard 유지)
   quota enqueue            태스크 대화형 등록
   quota enqueue --night --prompt "..." --size xs --perm read-only
                            비대화형 등록 + 야간 저사용 시간 자동 실행
+  quota mcp                MCP stdio 서버 시작
   quota status [--json]    현재 사용률·예측·7일 KPI 출력
   quota tasks [--json]     태스크 큐 상태 출력
   quota hint [--threshold N]  세션이 임계값 이상이면 넛지 1줄 (hook용)
@@ -59,6 +63,13 @@ export async function main(argv: string[]): Promise<void> {
       }
       return;
     }
+    case "paced-executor": {
+      const ok = await runPacedOnce();
+      process.exitCode = ok ? 0 : 1;
+      return;
+    }
+    case "mcp":
+      return startMcpServer();
     case "install":
       return install();
     case "uninstall":
