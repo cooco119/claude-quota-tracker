@@ -50,8 +50,8 @@ export class SchedulerMetaStore {
     return {
       taskId: r.task_id as number,
       intent: r.intent as SchedulingIntent,
-      deadlineMs: (r.deadline_ms as number) ?? null,
-      estimatedTokens: (r.estimated_tokens as number) ?? null,
+      deadlineMs: (r.deadline_ms as number | null) ?? null,
+      estimatedTokens: (r.estimated_tokens as number | null) ?? null,
       paused: r.paused === 1,
       continuousOk: r.continuous_ok === 1,
       createdTs: r.created_ts as number,
@@ -108,8 +108,10 @@ export class SchedulerMetaStore {
   }
 
   list(): TaskScheduleMeta[] {
-    return (this.db.prepare("SELECT * FROM task_schedule_meta ORDER BY updated_ts DESC").all()
-      as Array<Record<string, unknown>>).map((r) => this.row(r));
+    const rows = this.db.prepare(
+      "SELECT * FROM task_schedule_meta ORDER BY updated_ts DESC",
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.row(r));
   }
 
   close(): void { this.db.close(); }
