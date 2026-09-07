@@ -1,13 +1,13 @@
 {
   "name": "quota-tracker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Track Claude Max20 usage windows, forecast burn rate, nudge on under-use, and schedule heavy work for low-usage night hours.",
+  "description": "Track Claude usage, forecast burn rate, and schedule Claude Code work against 5-hour and weekly quota budgets.",
   "license": "MIT",
   "author": "jaejun.lee",
-  "homepage": "https://github.com/cooco119/claude-quota-tracker#readme",
-  "repository": { "type": "git", "url": "https://github.com/cooco119/claude-quota-tracker.git" },
-  "keywords": ["claude", "claude-code", "quota", "macos", "scheduler", "launchd"],
+  "homepage": "https://github.com/damn-fine-pizza/claude-quota-tracker#readme",
+  "repository": { "type": "git", "url": "https://github.com/damn-fine-pizza/claude-quota-tracker.git" },
+  "keywords": ["claude", "claude-code", "quota", "scheduler", "mcp", "launchd"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -17,7 +17,8 @@
     "menubar": "node dist/menubar.js",
     "enqueue": "node dist/enqueue.js",
     "executor": "node dist/executor.js",
-    "paced-executor": "node dist/paced-executor.js"
+    "paced-executor": "node dist/paced-executor.js",
+    "mcp": "node dist/mcp-server.js"
   },
   "engines": {
     "node": ">=22.5.0"
