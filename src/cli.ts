@@ -1,5 +1,6 @@
 import { CONFIG_PATH, DATA_DIR } from "./config.js";
 import { dashboard } from "./dashboard.js";
+import { runDaemon } from "./daemon.js";
 import { enqueue } from "./enqueue.js";
 import { runManualTask, runNightLoop } from "./executor.js";
 import { install, uninstall } from "./install.js";
@@ -9,35 +10,31 @@ import { printHint, printStatus, printTasks } from "./report.js";
 import { runPacedOnce } from "./paced-executor.js";
 import { startMcpServer } from "./mcp-server.js";
 
-const HELP = `quota — Claude Max20 quota tracker & quota-aware task orchestrator
+const HELP = `quota — Claude quota tracker & quota-aware task orchestrator
 
 Usage:
-  quota install            설치: 런처 설치 + launchd 등록 + SwiftBar 시작
-  quota uninstall          launchd 해제 (데이터 보존)
-  quota poll               usage 1회 폴링 (launchd가 5분마다 호출)
-  quota executor           기존 야간 큐 소화 루프
-  quota paced-executor     quota-aware admission 후 최대 1개 태스크 실행
-  quota executor --task N  태스크 N 수동 실행 (hard quota guard 유지)
-  quota enqueue            태스크 대화형 등록
-  quota enqueue --night --prompt "..." --size xs --perm read-only
-                           비대화형 등록 + 야간 저사용 시간 자동 실행
-  quota mcp                MCP stdio 서버 시작
-  quota status [--json]    현재 사용률·예측·7일 KPI 출력
-  quota tasks [--json]     태스크 큐 상태 출력
-  quota hint [--threshold N]  세션이 임계값 이상이면 넛지 1줄 (hook용)
-  quota menubar            SwiftBar 플러그인 출력
-  quota dashboard [--open] 로컬 웹 대시보드 기동 (멱등)
-  quota ingest             세션 로그 → 전체 사용량 적재 (poll이 자동 수행)
-  quota paths              config/data 경로 출력
+  quota install            install launcher + native scheduler when available
+  quota uninstall          remove native scheduler integration (data preserved)
+  quota daemon             portable polling loop (no systemd/launchd required)
+  quota poll               poll usage once
+  quota executor           legacy night queue loop
+  quota paced-executor     quota-aware admission + at most one task
+  quota executor --task N  run task N manually (hard quota guards preserved)
+  quota enqueue            interactive task registration
+  quota mcp                start MCP stdio server
+  quota status [--json]    current usage/forecast/KPI
+  quota tasks [--json]     task queue state
+  quota hint [--threshold N]
+  quota menubar            SwiftBar output (macOS)
+  quota dashboard [--open] local dashboard
+  quota ingest             ingest Claude Code session logs
+  quota paths              print config/data paths
 `;
 
-/** node:sqlite needs Node ≥22.5; fail with a clear message, not a module crash. */
 function checkNodeVersion(): boolean {
   const [maj, min] = process.versions.node.split(".").map(Number);
   if (maj < 22 || (maj === 22 && min < 5)) {
-    console.error(
-      `quota는 Node 22.5+ 가 필요합니다 (node:sqlite 내장). 현재: ${process.versions.node}`,
-    );
+    console.error(`quota requires Node 22.5+ (current: ${process.versions.node})`);
     return false;
   }
   return true;
@@ -53,41 +50,27 @@ export async function main(argv: string[]): Promise<void> {
       console.log(`[quota-tracker] polled ${n} window readings`);
       return;
     }
+    case "daemon":
+      return runDaemon();
     case "executor": {
       const taskFlag = argv.indexOf("--task");
       if (taskFlag !== -1) {
         const ok = await runManualTask(Number(argv[taskFlag + 1]));
         process.exitCode = ok ? 0 : 1;
-      } else {
-        await runNightLoop();
-      }
+      } else await runNightLoop();
       return;
     }
     case "paced-executor": {
-      const ok = await runPacedOnce();
-      process.exitCode = ok ? 0 : 1;
-      return;
+      const ok = await runPacedOnce(); process.exitCode = ok ? 0 : 1; return;
     }
-    case "mcp":
-      return startMcpServer();
-    case "install":
-      return install();
-    case "uninstall":
-      return uninstall();
-    case "enqueue":
-      return enqueue(argv.slice(1));
-    case "menubar":
-      console.log(renderMenubar());
-      return;
-    case "status":
-      printStatus(argv.slice(1));
-      return;
-    case "tasks":
-      printTasks(argv.slice(1));
-      return;
-    case "hint":
-      printHint(argv.slice(1));
-      return;
+    case "mcp": return startMcpServer();
+    case "install": return install();
+    case "uninstall": return uninstall();
+    case "enqueue": return enqueue(argv.slice(1));
+    case "menubar": console.log(renderMenubar()); return;
+    case "status": printStatus(argv.slice(1)); return;
+    case "tasks": printTasks(argv.slice(1)); return;
+    case "hint": printHint(argv.slice(1)); return;
     case "ingest": {
       const { ingestUsage } = await import("./ingest.js");
       const { Store } = await import("./store.js");
@@ -95,27 +78,16 @@ export async function main(argv: string[]): Promise<void> {
       const store = new Store(DB_PATH);
       try {
         const r = ingestUsage(store, Date.now());
-        console.log(
-          `[quota-tracker] ingest: ${r.inserted} new events from ${r.scanned}/${r.files} files`,
-        );
-      } finally {
-        store.close();
-      }
+        console.log(`[quota-tracker] ingest: ${r.inserted} new events from ${r.scanned}/${r.files} files`);
+      } finally { store.close(); }
       return;
     }
-    case "dashboard":
-      return dashboard(argv.slice(1));
-    case "paths":
-      console.log(`config: ${CONFIG_PATH}`);
-      console.log(`data:   ${DATA_DIR}`);
-      return;
+    case "dashboard": return dashboard(argv.slice(1));
+    case "paths": console.log(`config: ${CONFIG_PATH}`); console.log(`data:   ${DATA_DIR}`); return;
     default:
       console.log(HELP);
       if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;
   }
 }
 
-main(process.argv.slice(2)).catch((e) => {
-  console.error("[quota-tracker] fatal:", e);
-  process.exitCode = 1;
-});
+main(process.argv.slice(2)).catch((e) => { console.error("[quota-tracker] fatal:", e); process.exitCode = 1; });
