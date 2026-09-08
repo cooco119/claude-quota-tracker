@@ -2,12 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/quota-aware-pacing]
+    branches: [main, feature/quota-aware-pacing, fix/linux-portability]
   pull_request:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,7 +30,7 @@ jobs:
       - name: Upload typecheck diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: typecheck-log
+          name: typecheck-log-${{ matrix.os }}
           path: typecheck.log
       - name: Fail on typecheck errors
         if: steps.typecheck.outputs.exit_code != '0'
